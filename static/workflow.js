@@ -344,9 +344,12 @@
     const cardNode = e.target.closest(".wf-card");
     if (act && act.dataset.act === "timer") return toggleTimer(cardById(Number(cardNode.dataset.id)));
     if (act && act.dataset.act === "col-menu") return openColumnMenu(act, Number(act.closest(".wf-col").dataset.col));
-    if (act && act.dataset.act === "add-card") return inlineInput(act, "Card title, Enter to add", async (title) => {
-      await api("POST", "/api/workflow/cards", { column_id: Number(act.closest(".wf-col").dataset.col), title });
-    });
+    if (act && act.dataset.act === "add-card") {
+      const colId = Number(act.closest(".wf-col").dataset.col);  // read before the button leaves the page
+      return inlineInput(act, "Card title, Enter to add", async (title) => {
+        await api("POST", "/api/workflow/cards", { column_id: colId, title });
+      });
+    }
     if (act && act.dataset.act === "add-col") return inlineInput(act, "Column name, Enter to add", async (name) => {
       await api("POST", "/api/workflow/columns", { name });
     });
