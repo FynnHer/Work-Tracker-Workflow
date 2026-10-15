@@ -28,8 +28,9 @@ with **Esc** or ✕; **↔** switches to full width. The panel remembers whether
 |---|---|
 | **Cards & columns** | **+ Add card** (Enter adds the next one right away), **+ Add column**; drag cards within and between columns |
 | **Card details** | Click a card: description, priority, due date, estimate, labels, checklist, column |
+| **Quick actions** | Right-click a card: open, start/stop timer, move to a column, priority, duplicate, archive, delete |
 | **Timer on a card** | ▶ on the card (or **Start timer** in its details). The tracker timer starts with the card title as its note; a timer running for something else is stopped first |
-| **Timer started on the tracker page** | The bar at the top offers **Count it towards a card…**, or use **Link running timer** in a card |
+| **Timer started on the tracker page** | The bar at the top offers **Count it towards a card…**, or use **Link running timer** in a card; the tracker note becomes the card title |
 | **Tracked vs. estimate** | Cards show tracked time / estimate, red when over; the details list every session (**Unlink** removes one from the card, not from the tracker) |
 | **WIP limits** | Column menu (⋯) → WIP limit; the column turns red when it has more cards than that |
 | **Done column** | Column menu → *Done column*. Cards in it are finished (crossed out, no overdue warning), and moving the running card there stops the timer |

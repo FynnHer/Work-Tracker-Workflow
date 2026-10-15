@@ -75,6 +75,7 @@
   document.body.insertAdjacentHTML("beforeend", `
     <button class="wf-tab" id="wf-tab" title="Workflow board (W)">${I.board}<span>Workflow</span><i class="wf-dot" id="wf-dot" hidden></i></button>
     <aside class="wf-panel" id="wf-panel" aria-label="Workflow">
+      <div class="wf-resize" id="wf-resize" title="Drag to resize · double-click to reset"></div>
       <div class="wf-head">
         <h2>${I.board} Workflow</h2>
         <input type="search" class="wf-search" id="wf-q" placeholder="Search cards…">
@@ -117,6 +118,7 @@
         <label>Labels <input id="wf-f-labels" list="wf-label-list" placeholder="Comma separated, e.g. client-a, bug"></label>
         <div>
           <h4>Checklist <span class="muted small" id="wf-f-check-count"></span></h4>
+          <div class="wf-progress" id="wf-f-check-bar"><div></div></div>
           <ul class="wf-checklist" id="wf-f-checklist"></ul>
           <input id="wf-f-check-new" placeholder="Add an item and press Enter" style="width:100%;margin-top:4px">
         </div>
@@ -158,14 +160,40 @@
     else menu.hidden = true;
   }
   function setWide(wide) {
-    panel.classList.toggle("wide", wide);
+    document.body.classList.toggle("wf-wide", wide);
     $("wf-wide").innerHTML = wide ? I.narrow : I.wide;
     $("wf-wide").title = wide ? "Narrow" : "Full width";
     store.set("wide", wide ? "1" : "");
   }
   $("wf-tab").onclick = () => setOpen(true);
   $("wf-close").onclick = () => setOpen(false);
-  $("wf-wide").onclick = () => setWide(!panel.classList.contains("wide"));
+  $("wf-wide").onclick = () => setWide(!document.body.classList.contains("wf-wide"));
+
+  // Panel width: drag the left edge; the tracker keeps at least MIN_PAGE px next to it.
+  const MIN_PANEL = 340, MIN_PAGE = 420;
+  const defaultWidth = () => Math.round(window.innerWidth * 0.42);
+  let panelWidth = Number(store.get("width")) || 0;
+  function applyWidth() {
+    const w = Math.round(Math.max(MIN_PANEL, Math.min(panelWidth || defaultWidth(), window.innerWidth - MIN_PAGE)));
+    document.documentElement.style.setProperty("--wf-w", w + "px");
+  }
+  $("wf-resize").addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    $("wf-resize").setPointerCapture(e.pointerId);
+    document.body.classList.add("wf-resizing");
+  });
+  $("wf-resize").addEventListener("pointermove", (e) => {
+    if (!document.body.classList.contains("wf-resizing")) return;
+    panelWidth = window.innerWidth - e.clientX;
+    applyWidth();
+  });
+  $("wf-resize").addEventListener("pointerup", () => {
+    document.body.classList.remove("wf-resizing");
+    store.set("width", String(Math.round(panelWidth)));
+  });
+  $("wf-resize").addEventListener("dblclick", () => { panelWidth = 0; store.set("width", ""); applyWidth(); });
+  window.addEventListener("resize", applyWidth);
+  applyWidth();
 
   document.addEventListener("keydown", (e) => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) || document.activeElement.isContentEditable;
@@ -236,6 +264,7 @@
     if (e.target.dataset.act !== "link" || !e.target.value) return;
     await api("POST", `/api/workflow/cards/${e.target.value}/link`);
     await load();
+    trackerRefresh();  // the tracker's note now shows the card title
   }));
 
   async function stopTimer() {
@@ -484,15 +513,79 @@
       menu.hidden = true;
       await load();
     });
-    menu.hidden = false;
+    menu.hidden = false;  // so it can be measured
     const r = button.getBoundingClientRect();
-    menu.style.top = Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8) + "px";
-    menu.style.left = Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8)) + "px";
+    showMenuAt(r.right - menu.offsetWidth, r.bottom + 4);
     menu.querySelector('[data-f="name"]').focus();
+  }
+
+  /** Show the menu at (x, y), kept inside the window; flips up when there's no room below. */
+  function showMenuAt(x, y) {
+    menu.hidden = false;
+    const viewW = document.documentElement.clientWidth;  // without the scrollbar
+    const w = menu.offsetWidth, h = menu.offsetHeight;
+    if (y + h > window.innerHeight - 8) y = Math.max(8, y - h);
+    menu.style.left = Math.max(8, Math.min(x, viewW - w - 8)) + "px";
+    menu.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + "px";
   }
   document.addEventListener("mousedown", (e) => {
     if (!menu.hidden && !menu.contains(e.target) && !e.target.closest('[data-act="col-menu"]')) menu.hidden = true;
   });
+  $("wf-board").addEventListener("scroll", () => (menu.hidden = true), true);
+
+  // ---------------------------------------------------------- card menu (right click)
+
+  $("wf-board").addEventListener("contextmenu", (e) => {
+    const node = e.target.closest(".wf-card");
+    if (!node || dragId !== null) return;
+    e.preventDefault();
+    openCardMenu(cardById(Number(node.dataset.id)), e.clientX, e.clientY);
+  });
+
+  function openCardMenu(card, x, y) {
+    const others = board.columns.filter((c) => c.id !== card.column_id);
+    menu.innerHTML = `
+      <button class="btn link" data-a="open"><b>Open</b></button>
+      <button class="btn link" data-a="timer">${card.running ? "Stop timer" : board.running ? "Switch timer to this card" : "Start timer"}</button>
+      ${others.length ? `<hr><div class="wf-menu-label">Move to</div>
+        ${others.map((c) => `<button class="btn link" data-a="move" data-col="${c.id}">${esc(c.name)}</button>`).join("")}` : ""}
+      <hr><div class="wf-menu-label">Priority</div>
+      <div class="wf-menu-row">${Object.entries(PRIO).map(([v, n]) =>
+        `<button class="btn link${card.priority === v ? " on" : ""}" data-a="prio" data-v="${v}">${v ? `<i class="wf-prio ${v}"></i>` : ""}${n}</button>`).join("")}</div>
+      <hr>
+      <button class="btn link" data-a="duplicate">Duplicate</button>
+      <button class="btn link" data-a="archive">Archive</button>
+      <button class="btn link" data-a="delete" style="color:var(--danger)">Delete</button>`;
+    menu.onkeydown = null;
+    menu.onclick = attempt(async (e) => {
+      const btn = e.target.closest("[data-a]");
+      if (!btn) return;
+      menu.hidden = true;
+      const a = btn.dataset.a;
+      if (a === "open") return openCard(card.id);
+      if (a === "timer") return toggleTimer(card);
+      if (a === "move") {
+        await api("POST", `/api/workflow/cards/${card.id}/move`, { column_id: Number(btn.dataset.col), position: 1e6 });
+      } else if (a === "prio") {
+        await api("PATCH", `/api/workflow/cards/${card.id}`, { priority: btn.dataset.v });
+      } else if (a === "duplicate") {
+        const copy = await api("POST", "/api/workflow/cards", { column_id: card.column_id, title: card.title + " (copy)" });
+        await api("PATCH", `/api/workflow/cards/${copy.id}`, {
+          description: card.description, priority: card.priority, due_date: card.due_date, estimate: card.estimate,
+          labels: card.labels, checklist: card.checklist.map((i) => ({ text: i.text, done: false })),
+        });
+        await api("POST", `/api/workflow/cards/${copy.id}/move`, { column_id: card.column_id, position: card.position + 1 });
+      } else if (a === "archive") {
+        await api("PATCH", `/api/workflow/cards/${card.id}`, { archived: true });
+      } else if (a === "delete") {
+        if (!confirm(`Delete “${card.title}”? Its tracked time stays in the tracker.`)) return;
+        await api("DELETE", `/api/workflow/cards/${card.id}`);
+      }
+      await load();
+      if (card.running && a !== "prio" && a !== "duplicate") trackerRefresh();  // a done column, archive or delete stops it
+    });
+    showMenuAt(x, y);
+  }
 
   // ---------------------------------------------------------- filters, archive view
 
@@ -611,7 +704,10 @@
   }
   const checkCount = () => {
     const n = editing.checklist.length;
-    $("wf-f-check-count").textContent = n ? `${editing.checklist.filter((i) => i.done).length}/${n}` : "";
+    const done = editing.checklist.filter((i) => i.done).length;
+    $("wf-f-check-count").textContent = n ? `${done}/${n}` : "";
+    $("wf-f-check-bar").hidden = !n;
+    $("wf-f-check-bar").firstChild.style.width = n ? (done / n) * 100 + "%" : "0";
   };
 
   $("wf-f-check-new").addEventListener("keydown", (e) => {
@@ -628,6 +724,17 @@
   $("wf-f-x").onclick = closeDialog;
   $("wf-f-cancel").onclick = closeDialog;
   dialog.addEventListener("cancel", () => (editing = null));  // Esc
+
+  // Enter with nothing to type into focused (blank space, a checkbox): save and close the card.
+  // (Listens on the document: a click on blank space can leave focus on <body>, outside the dialog.)
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing || !dialog.open) return;
+    const el = document.activeElement;
+    const ownsEnter = (el.tagName === "INPUT" && el.type !== "checkbox") || /^(TEXTAREA|SELECT|BUTTON|SUMMARY|A)$/.test(el.tagName);
+    if (ownsEnter || !editing) return;
+    e.preventDefault();
+    $("wf-form").requestSubmit();
+  });
 
   $("wf-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -662,6 +769,7 @@
   $("wf-f-link").onclick = attempt(async () => {
     await api("POST", `/api/workflow/cards/${editing.id}/link`);
     await load();
+    trackerRefresh();
     renderCardTime();
     await loadCardSessions();
   });

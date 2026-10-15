@@ -379,8 +379,10 @@ def start_card(cid):
 
 @bp.post("/api/workflow/cards/<int:cid>/link")
 def link_running(cid):
-    """Count the timer that is already running (started on the tracker page) towards this card."""
-    if get_card(cid) is None:
+    """Count the timer that is already running (started on the tracker page) towards this card;
+    its note becomes the card title, as when the timer is started from the card."""
+    card = get_card(cid)
+    if card is None:
         return not_found()
     run = T.running_session()
     if not run:
@@ -388,6 +390,8 @@ def link_running(cid):
     db = wdb()
     db.execute("INSERT OR REPLACE INTO card_sessions VALUES (?, ?)", (run["id"], cid))
     db.commit()
+    T.get_db().execute("UPDATE sessions SET note = ? WHERE id = ?", (card["title"], run["id"]))
+    T.get_db().commit()
     return card_response(cid)
 
 
