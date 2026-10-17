@@ -74,19 +74,18 @@
   // ---------------------------------------------------------- state
 
   let board = null;        // last /api/workflow/board response
-  let fetchedAt = 0;       // performance.now() of that response
+  let fetchedAt = 0;       // Date.now() of that response (wall clock: keeps counting through sleep)
   let drawer = null;       // side drawer showing: null | "archive" | "phases"
   let archived = [];       // last /api/workflow/archive response
   let dragId = null;       // card being dragged
   let colDragId = null;    // column being dragged (grabbed anywhere outside its cards)
   let editing = null;      // card open in the dialog (a copy)
-  let pollTimer = null;    // 10 s board refresh, only while open and visible (see schedule)
   let tickTimer = null;    // 1 s live clock, only while open, visible and a timer runs
   const filters = { q: "", label: "", prio: "", type: "", phase: "" };  // phase: "" | "none" | phase id
   const FILTER_KEYS = ["label", "prio", "type", "phase"];
 
   const isOpen = () => document.body.classList.contains("wf-open");
-  const liveExtra = () => (board && board.running ? (performance.now() - fetchedAt) / 1000 : 0);
+  const liveExtra = () => (board && board.running ? (Date.now() - fetchedAt) / 1000 : 0);
   const columnById = (id) => board.columns.find((c) => c.id === id);
   const cardById = (id) => board.cards.find((c) => c.id === id);
   const cardsIn = (colId) => board.cards.filter((c) => c.column_id === colId).sort((a, b) => a.position - b.position);
@@ -313,7 +312,7 @@
     const data = await api("GET", "/api/workflow/board");
     const sig = signature(data);
     board = data;
-    fetchedAt = performance.now();
+    fetchedAt = Date.now();
     if (quiet && sig === lastSignature) tick();
     else render();
     lastSignature = sig;
@@ -1499,13 +1498,17 @@
   const busy = () => dragId !== null || (panel.contains(document.activeElement) && document.activeElement.tagName === "INPUT"
     && document.activeElement.id !== "wf-q");
 
-  // Timers run only while they're needed: the 10 s refresh while the board is open and the page is
-  // visible, the 1 s clock additionally only while a timer runs. Closed or hidden, nothing wakes up.
+  // No polling: the tracker page holds a request open and fires tracker:changed when anything changed
+  // (e.g. Start/Stop from the menu bar). The 1 s clock runs only while open, visible and timing.
+  let catchUp = null;  // a change came while dragging or typing: reload once that's over
+  document.addEventListener("tracker:changed", function reload() {
+    clearTimeout(catchUp);
+    if (!isOpen() || document.hidden) return;  // opening / showing the board loads it anyway
+    if (busy() || !menu.hidden) catchUp = setTimeout(reload, 2000);
+    else load(true).catch(() => {});
+  });
   function schedule() {
-    const active = isOpen() && !document.hidden;
-    if (active && !pollTimer) pollTimer = setInterval(() => { if (!busy() && menu.hidden) load(true).catch(() => {}); }, 10000);
-    if (!active && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-    const ticking = active && !!board?.running;
+    const ticking = isOpen() && !document.hidden && !!board?.running;
     if (ticking && !tickTimer) tickTimer = setInterval(tick, 1000);
     if (!ticking && tickTimer) { clearInterval(tickTimer); tickTimer = null; }
   }

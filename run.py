@@ -26,4 +26,9 @@ if __name__ == "__main__":
     if sys.platform == "darwin" and os.environ.get("WAKE_PROMPT", "1") == "1":
         tracker.watcher_running = True
         threading.Thread(target=tracker.wake_watcher, daemon=True).start()
-    app.run(host="localhost", port=int(os.environ.get("PORT", 47474)), debug=False)
+    if sys.platform == "darwin" and hasattr(tracker, "menubar_pusher"):
+        threading.Thread(target=tracker.menubar_pusher, daemon=True).start()
+    # Like app.run(), but the accept loop sleeps until a request comes (werkzeug's default wakes
+    # every 0.5 s to check for a shutdown; this runs as long as the Mac does).
+    from werkzeug.serving import make_server
+    make_server("localhost", int(os.environ.get("PORT", 47474)), app, threaded=True).serve_forever(poll_interval=None)

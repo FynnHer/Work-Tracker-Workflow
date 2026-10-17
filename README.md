@@ -71,7 +71,8 @@ Browser ── /            → tracker page + workflow.css / workflow-boot.js i
 - `static/workflow-boot.js` is all the page loads at first: the tab (and its dot while the timer
   runs on a card) and the W / A / ⌘K keys. It loads `static/workflow.js` the first time the board is
   used, so an unused board costs no memory or requests to speak of. While the board is closed or the
-  browser tab is hidden nothing runs; open, it refreshes every 10 s and redraws only on changes.
+  browser tab is hidden nothing runs; open, it reloads when the tracker page reports a change
+  (`tracker:changed`, from its `/api/wait`) and redraws only what changed — no polling.
 - `static/workflow.js` builds the panel, card dialog and command palette and uses the tracker's CSS variables
   and buttons, so it follows its light and dark theme. After a timer change it calls the tracker
   page's `refreshAll()`, so the clock and tiles update immediately.
