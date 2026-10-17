@@ -1,5 +1,9 @@
 # Workflow — kanban module for Work Tracker
 
+<p align="center">
+  <a href="docs/workflow.mp4"><img src="docs/hero.gif" alt="Workflow in 20 seconds: press W to open the board, move a card with the command palette, start the timer on it and watch the time land in the tracker's heatmap" width="880"></a>
+</p>
+
 A kanban board that slides in from the right edge of the Work Tracker page. Cards are connected to
 the tracker's timer: start the timer on a card and the time counts as normal tracker time (today,
 week, overtime, heatmap) and adds up on the card.
