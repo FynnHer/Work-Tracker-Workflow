@@ -29,9 +29,8 @@
 }
 .wf-tab:hover { color: var(--accent); }
 .wf-tab span { writing-mode: vertical-rl; transform: rotate(180deg); letter-spacing: .04em; }
-.wf-tab .wf-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: wf-pulse 2s infinite; }
+.wf-tab .wf-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .wf-tab .wf-dot[hidden] { display: none; }
-@keyframes wf-pulse { 50% { opacity: .35; } }
 body.wf-open .wf-tab { display: none; }
 
 /* Panel: docked on the right; the tracker moves over into the space left of it. */

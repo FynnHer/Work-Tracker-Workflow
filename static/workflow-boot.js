@@ -42,7 +42,7 @@
     if (e.key === "a" || e.key === "A") { e.preventDefault(); app().then((w) => w.newCard()); }
   });
 
-  // The dot: a tiny request on load, after Start/Stop on the tracker page and when the tab comes back.
+  // The dot: a tiny request on load, after Start/Stop on the tracker page or elsewhere and when the tab comes back.
   async function updateDot() {
     try {
       const res = await fetch("/api/workflow/running");
@@ -54,4 +54,5 @@
     document.getElementById(id)?.addEventListener(type, () => setTimeout(updateDot, 400));
   }
   document.addEventListener("visibilitychange", () => { if (!document.hidden) updateDot(); });
+  document.addEventListener("tracker:changed", updateDot);  // e.g. Stop from the menu bar
 })();
