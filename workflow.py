@@ -15,7 +15,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("WORKFLOW_DB", os.path.join(BASE_DIR, "workflow.db"))
 
 PRIORITIES = ("", "low", "medium", "high")
+TYPES = ("task", "bug", "issue")
+COLORS = ("", "gray", "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink")  # column accents
 DEFAULT_COLUMNS = [("To do", 0), ("In progress", 0), ("Done", 1)]
+SWITCH_GRACE = 120  # seconds: a card started this soon after the running session began takes that session over
 
 bp = Blueprint("workflow", __name__, static_folder="static", static_url_path="/workflow/static")
 T = None  # the tracker module (Tracker/app.py), set by register()
@@ -47,7 +50,8 @@ def init_db():
                 name       TEXT NOT NULL,
                 position   INTEGER NOT NULL,
                 wip_limit  INTEGER NOT NULL DEFAULT 0,   -- 0 = no limit
-                is_done    INTEGER NOT NULL DEFAULT 0    -- cards here count as finished
+                is_done    INTEGER NOT NULL DEFAULT 0,   -- cards here count as finished
+                color      TEXT NOT NULL DEFAULT ''      -- one of COLORS, '' = none
             );
             CREATE TABLE IF NOT EXISTS cards (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,6 +69,14 @@ def init_db():
                 archived    INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_cards_column ON cards(column_id, position);
+            -- Phases until a release (milestones), in order; cards can belong to one.
+            CREATE TABLE IF NOT EXISTS phases (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT NOT NULL,
+                position     INTEGER NOT NULL,
+                target_date  TEXT,                       -- YYYY-MM-DD
+                released_at  TEXT                        -- set once the phase is released
+            );
             -- Tracker sessions worked on a card (sessions live in tracker.db).
             CREATE TABLE IF NOT EXISTS card_sessions (
                 session_id  INTEGER PRIMARY KEY,
@@ -72,6 +84,14 @@ def init_db():
             );
             """
         )
+        # Boards created before column colours, card types and phases.
+        if "color" not in {r[1] for r in db.execute("PRAGMA table_info(columns)")}:
+            db.execute("ALTER TABLE columns ADD COLUMN color TEXT NOT NULL DEFAULT ''")
+        card_cols = {r[1] for r in db.execute("PRAGMA table_info(cards)")}
+        if "type" not in card_cols:
+            db.execute("ALTER TABLE cards ADD COLUMN type TEXT NOT NULL DEFAULT 'task'")  # one of TYPES
+        if "phase_id" not in card_cols:
+            db.execute("ALTER TABLE cards ADD COLUMN phase_id INTEGER REFERENCES phases(id)")
         if not db.execute("SELECT 1 FROM columns").fetchone():
             db.executemany("INSERT INTO columns (name, position, is_done) VALUES (?, ?, ?)",
                            [(n, i, d) for i, (n, d) in enumerate(DEFAULT_COLUMNS)])
@@ -93,7 +113,8 @@ def not_found():
 
 def column_dict(row) -> dict:
     return {"id": row["id"], "name": row["name"], "position": row["position"],
-            "wip_limit": row["wip_limit"], "is_done": bool(row["is_done"])}
+            "wip_limit": row["wip_limit"], "is_done": bool(row["is_done"]),
+            "color": row["color"]}
 
 
 def card_dict(row, tracked=0, running=False) -> dict:
@@ -103,8 +124,22 @@ def card_dict(row, tracked=0, running=False) -> dict:
         "due_date": row["due_date"], "estimate": row["estimate"],
         "labels": json.loads(row["labels"]), "checklist": json.loads(row["checklist"]),
         "created_at": row["created_at"], "done_at": row["done_at"], "archived": bool(row["archived"]),
+        "type": row["type"], "phase_id": row["phase_id"],
         "tracked_seconds": tracked, "running": running,
     }
+
+
+def phases_with_progress() -> list:
+    """Phases in order, each with {total, done}: active cards plus archived finished ones
+    (an archived card that was never done doesn't count)."""
+    db = wdb()
+    counts = {r["phase_id"]: (r["total"], r["done"]) for r in db.execute(
+        """SELECT phase_id, COUNT(*) AS total, COUNT(done_at) AS done FROM cards
+           WHERE phase_id IS NOT NULL AND (archived = 0 OR done_at IS NOT NULL) GROUP BY phase_id""")}
+    return [{"id": r["id"], "name": r["name"], "position": r["position"], "target_date": r["target_date"],
+             "released_at": r["released_at"], "total": counts.get(r["id"], (0, 0))[0],
+             "done": counts.get(r["id"], (0, 0))[1]}
+            for r in db.execute("SELECT * FROM phases ORDER BY position")]
 
 
 def time_per_card() -> tuple:
@@ -154,6 +189,18 @@ def stop_tracker():
         T.get_db().commit()
 
 
+def split_off_card():
+    """The running card is finished but work goes on: end its session now and keep the timer
+    running in a new session without a note (not linked to any card)."""
+    run = T.running_session()
+    if run:
+        t = now()
+        tdb = T.get_db()
+        tdb.execute("UPDATE sessions SET end_time = ? WHERE id = ?", (t, run["id"]))
+        tdb.execute("INSERT INTO sessions (start_time, note) VALUES (?, '')", (t,))
+        tdb.commit()
+
+
 # ---------------------------------------------------------------- board
 
 @bp.get("/api/workflow/board")
@@ -169,9 +216,16 @@ def board():
         "cards": [card_dict(r, totals.get(r["id"], 0), running == r["id"])
                   for r in db.execute("SELECT * FROM cards WHERE archived = 0 ORDER BY column_id, position")],
         "archived_count": db.execute("SELECT COUNT(*) FROM cards WHERE archived = 1").fetchone()[0],
+        "phases": phases_with_progress(),
         "running": T.session_dict(run) if run else None,
         "running_card_id": running,
     })
+
+
+@bp.get("/api/workflow/running")
+def running():
+    """Just the card the timer runs on (for the tab's dot while the board isn't loaded)."""
+    return jsonify({"card_id": running_card_id()})
 
 
 @bp.get("/api/workflow/archive")
@@ -208,11 +262,18 @@ def edit_column(col_id):
     except (TypeError, ValueError):
         return bad_request("The WIP limit must be a number (0 = no limit).")
     is_done = int(bool(data.get("is_done", col["is_done"])))
+    color = data.get("color", col["color"])
     if not name or wip < 0:
         return bad_request("Name required; WIP limit 0 or more.")
-    db.execute("UPDATE columns SET name = ?, wip_limit = ?, is_done = ? WHERE id = ?", (name, wip, is_done, col_id))
+    if color not in COLORS:
+        return bad_request("Unknown colour.")
+    db.execute("UPDATE columns SET name = ?, wip_limit = ?, is_done = ?, color = ? WHERE id = ?",
+               (name[:100], wip, is_done, color, col_id))
     if is_done != col["is_done"]:  # cards already in it become done / not done now
         db.execute("UPDATE cards SET done_at = ? WHERE column_id = ?", (now() if is_done else None, col_id))
+        running = running_card_id()
+        if is_done and running and get_card(running)["column_id"] == col_id:
+            split_off_card()
     db.commit()
     return jsonify(column_dict(db.execute("SELECT * FROM columns WHERE id = ?", (col_id,)).fetchone()))
 
@@ -239,6 +300,79 @@ def delete_column(col_id):
     first = db.execute("SELECT id FROM columns WHERE id != ? ORDER BY position LIMIT 1", (col_id,)).fetchone()[0]
     db.execute("UPDATE cards SET column_id = ? WHERE column_id = ?", (first, col_id))
     cur = db.execute("DELETE FROM columns WHERE id = ?", (col_id,))
+    db.commit()
+    return ("", 204) if cur.rowcount else not_found()
+
+
+# ---------------------------------------------------------------- phases
+
+def read_phase_fields(data: dict, partial: bool) -> dict:
+    out = {}
+    if "name" in data or not partial:
+        name = str(data.get("name", "")).strip()
+        if not name:
+            raise ValueError("The phase needs a name.")
+        out["name"] = name[:100]
+    if "target_date" in data:
+        target = data["target_date"] or None
+        if target:
+            T.parse_day(target)  # ValueError if malformed
+        out["target_date"] = target
+    if "released" in data:
+        out["released_at"] = now() if data["released"] else None
+    return out
+
+
+@bp.post("/api/workflow/phases")
+def add_phase():
+    db = wdb()
+    try:
+        fields = read_phase_fields(request.get_json(silent=True) or {}, partial=False)
+    except (TypeError, ValueError) as e:
+        return bad_request(str(e) or "Invalid phase.")
+    fields["position"] = db.execute("SELECT COALESCE(MAX(position) + 1, 0) FROM phases").fetchone()[0]
+    cur = db.execute(f"INSERT INTO phases ({', '.join(fields)}) VALUES ({', '.join('?' * len(fields))})",
+                     list(fields.values()))
+    db.commit()
+    return jsonify({"id": cur.lastrowid}), 201
+
+
+@bp.patch("/api/workflow/phases/<int:pid>")
+def edit_phase(pid):
+    db = wdb()
+    phase = db.execute("SELECT * FROM phases WHERE id = ?", (pid,)).fetchone()
+    if phase is None:
+        return not_found()
+    data = request.get_json(silent=True) or {}
+    try:
+        fields = read_phase_fields(data, partial=True)
+    except (TypeError, ValueError) as e:
+        return bad_request(str(e) or "Invalid phase.")
+    if "released_at" in fields and data["released"] and phase["released_at"]:
+        del fields["released_at"]  # keep the original release date
+    if fields:
+        db.execute(f"UPDATE phases SET {', '.join(k + ' = ?' for k in fields)} WHERE id = ?", [*fields.values(), pid])
+        db.commit()
+    return jsonify({"id": pid})
+
+
+@bp.post("/api/workflow/phases/order")
+def order_phases():
+    ids = (request.get_json(silent=True) or {}).get("ids", [])
+    db = wdb()
+    if sorted(ids) != sorted(r[0] for r in db.execute("SELECT id FROM phases")):
+        return bad_request("Send all phase ids in the new order.")
+    db.executemany("UPDATE phases SET position = ? WHERE id = ?", [(i, p) for i, p in enumerate(ids)])
+    db.commit()
+    return "", 204
+
+
+@bp.delete("/api/workflow/phases/<int:pid>")
+def delete_phase(pid):
+    """Delete a phase; its cards stay, without a phase."""
+    db = wdb()
+    db.execute("UPDATE cards SET phase_id = NULL WHERE phase_id = ?", (pid,))
+    cur = db.execute("DELETE FROM phases WHERE id = ?", (pid,))
     db.commit()
     return ("", 204) if cur.rowcount else not_found()
 
@@ -272,6 +406,15 @@ def read_card_fields(data: dict, partial: bool):
     if "labels" in data:
         labels = [str(l).strip()[:40] for l in data["labels"] if str(l).strip()]
         out["labels"] = json.dumps(list(dict.fromkeys(labels)))  # unique, order kept
+    if "type" in data:
+        if data["type"] not in TYPES:
+            raise ValueError("Type is task, bug or issue.")
+        out["type"] = data["type"]
+    if "phase_id" in data:
+        pid = data["phase_id"] or None
+        if pid is not None and not wdb().execute("SELECT 1 FROM phases WHERE id = ?", (pid,)).fetchone():
+            raise ValueError("Unknown phase.")
+        out["phase_id"] = pid
     if "checklist" in data:
         out["checklist"] = json.dumps([{"text": str(i["text"]).strip()[:300], "done": bool(i.get("done"))}
                                        for i in data["checklist"] if str(i.get("text", "")).strip()])
@@ -323,7 +466,8 @@ def edit_card(cid):
 
 @bp.post("/api/workflow/cards/<int:cid>/move")
 def move_card(cid):
-    """Move a card to {column_id, position}. Into a done column: it's finished, its timer stops."""
+    """Move a card to {column_id, position}. Into a done column: it's finished; if its timer runs,
+    the timer keeps going without it (see split_off_card)."""
     data = request.get_json(silent=True) or {}
     db = wdb()
     card = get_card(cid)
@@ -343,7 +487,29 @@ def move_card(cid):
         renumber(card["column_id"], rest)
         db.execute("UPDATE cards SET done_at = ? WHERE id = ?", (now() if col["is_done"] else None, cid))
         if col["is_done"] and running_card_id() == cid:
-            stop_tracker()
+            split_off_card()
+    db.commit()
+    return card_response(cid)
+
+
+@bp.post("/api/workflow/cards/<int:cid>/restore")
+def restore_card(cid):
+    """Bring an archived card back: on top of its column, or at {column_id, position} (Undo)."""
+    data = request.get_json(silent=True) or {}
+    db = wdb()
+    card = get_card(cid)
+    if card is None:
+        return not_found()
+    col = db.execute("SELECT * FROM columns WHERE id = ?", (data.get("column_id") or card["column_id"],)).fetchone()
+    if col is None:
+        return bad_request("Unknown column.")
+    ids = [r[0] for r in db.execute(
+        "SELECT id FROM cards WHERE column_id = ? AND archived = 0 AND id != ? ORDER BY position", (col["id"], cid))]
+    db.execute("UPDATE cards SET archived = 0, done_at = ? WHERE id = ?",
+               ((card["done_at"] or now()) if col["is_done"] else None, cid))
+    pos = max(0, min(int(data.get("position") or 0), len(ids)))
+    ids.insert(pos, cid)
+    renumber(col["id"], ids)
     db.commit()
     return card_response(cid)
 
@@ -361,18 +527,26 @@ def delete_card(cid):
 
 @bp.post("/api/workflow/cards/<int:cid>/start")
 def start_card(cid):
-    """Start the tracker timer for a card (note = card title). A timer for something else is stopped first."""
+    """Start the tracker timer for a card (note = card title). A timer for something else is stopped
+    first, unless it began less than SWITCH_GRACE ago (e.g. the note-less session after a card was
+    done, or a card started by mistake): then this card takes that session over, so switching cards
+    doesn't leave a trail of short sessions."""
     card = get_card(cid)
     if card is None:
         return not_found()
     if running_card_id() == cid:
         return bad_request("The timer already runs for this card.")
-    stop_tracker()
     tdb = T.get_db()
-    cur = tdb.execute("INSERT INTO sessions (start_time, note) VALUES (?, ?)", (now(), card["title"]))
+    run = T.running_session()
+    if run and (datetime.now() - T.parse(run["start_time"])).total_seconds() <= SWITCH_GRACE:
+        session_id = run["id"]
+        tdb.execute("UPDATE sessions SET note = ? WHERE id = ?", (card["title"], session_id))
+    else:
+        stop_tracker()
+        session_id = tdb.execute("INSERT INTO sessions (start_time, note) VALUES (?, ?)", (now(), card["title"])).lastrowid
     tdb.commit()
     db = wdb()
-    db.execute("INSERT OR REPLACE INTO card_sessions VALUES (?, ?)", (cur.lastrowid, cid))
+    db.execute("INSERT OR REPLACE INTO card_sessions VALUES (?, ?)", (session_id, cid))  # replaces another card's link
     db.commit()
     return card_response(cid)
 
@@ -416,8 +590,9 @@ def unlink_session(sid):
 
 # ---------------------------------------------------------------- hook into the tracker
 
+# Only the small loader comes with the page; it loads workflow.js when the board is first used.
 TAGS = ('<link rel="stylesheet" href="/workflow/static/workflow.css">\n'
-        '<script src="/workflow/static/workflow.js" defer></script>\n')
+        '<script src="/workflow/static/workflow-boot.js" defer></script>\n')
 
 
 def register(tracker):
