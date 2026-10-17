@@ -4,10 +4,12 @@ Registers its API and static files on the tracker's Flask app (see run.py). Boar
 own SQLite file; cards are linked to tracker sessions by id, so time tracked on a card is ordinary
 tracker time (today, week, overtime, heatmap) and the card shows the sum of its sessions.
 """
+import html
 import json
 import os
 import sqlite3
 from datetime import datetime
+from string import Template
 
 from flask import Blueprint, g, jsonify, request
 
@@ -586,6 +588,85 @@ def unlink_session(sid):
     db.execute("DELETE FROM card_sessions WHERE session_id = ?", (sid,))
     db.commit()
     return "", 204
+
+
+# ---------------------------------------------------------------- phone snapshot
+
+HEX = {"gray": "#8b949e", "red": "#e5534b", "orange": "#e0823d", "yellow": "#d4a72c", "green": "#3fa35b",
+       "teal": "#1f9e95", "blue": "#4184e4", "purple": "#9a6dd7", "pink": "#d95e9b"}  # as COLORS in workflow.js
+
+
+def write_snapshot():
+    """Fill snapshot.html with phases and the board; written as workflow.html next to the tracker's
+    worktracker.html in SNAPSHOT_DIR."""
+    esc = html.escape
+    db = wdb()
+    totals, running = time_per_card()
+    today = datetime.now().date().isoformat()
+
+    phases = "".join(
+        f'<div class="phase"><span>{esc(p["name"])}'
+        + (f' <span class="muted small">· {p["target_date"]}</span>' if p["target_date"] else "")
+        + f'</span><span class="small">{"Released" if p["released_at"] else f"{p['done']}/{p['total']}"}</span>'
+        f'<div class="bar"><div style="width: {round(100 * p["done"] / p["total"]) if p["total"] else 0}%"></div></div></div>'
+        for p in phases_with_progress())
+    phase_names = {p["id"]: p["name"] for p in phases_with_progress()}
+
+    def card_html(r):
+        c = card_dict(r, totals.get(r["id"], 0), running == r["id"])
+        tags = [c["type"]] if c["type"] != "task" else []
+        tags += [c["priority"]] if c["priority"] else []
+        meta = "".join(f'<span class="tag {t}">{esc(t)}</span>' for t in tags + c["labels"])
+        if c["due_date"]:
+            late = not c["done_at"] and c["due_date"] < today
+            meta += f'<span class="small{" neg" if late else " muted"}">due {c["due_date"]}</span> '
+        if c["phase_id"] in phase_names:
+            meta += f'<span class="small muted">· {esc(phase_names[c["phase_id"]])}</span>'
+        time_ = T.fmt_dur(c["tracked_seconds"]) if c["tracked_seconds"] else ""
+        if c["estimate"]:
+            time_ += f' <span class="muted">/ {T.fmt_dur(c["estimate"])}</span>'
+        checks = c["checklist"]
+        body = (f'<p>{esc(c["description"])}</p>' if c["description"] else "") + (
+            f'<ul>{"".join(f"<li>{"☑" if i["done"] else "☐"} {esc(i["text"])}</li>" for i in checks)}</ul>'
+            if checks else "")
+        return (f'<details class="item"><summary><span>{"<span class=dot>● </span>" if c["running"] else ""}'
+                f'{esc(c["title"])}</span><span class="small">{time_}</span>'
+                + (f'<span class="meta">{meta}</span>' if meta else "")
+                + f'</summary><div class="body">{body or "<p class=muted>No details</p>"}</div></details>')
+
+    cards: dict = {}
+    for r in db.execute("SELECT * FROM cards WHERE archived = 0 ORDER BY position"):
+        cards.setdefault(r["column_id"], []).append(r)
+    columns = "".join(
+        f'<details class="card column{" running" if any(r["id"] == running for r in cards.get(col["id"], [])) else ""}"'
+        + (f' style="--c: {HEX[col["color"]]}"' if col["color"] else "") + ("" if col["is_done"] else " open")
+        + f'><summary><h2><span>{esc(col["name"])}</span><span>{len(cards.get(col["id"], []))}'
+        + (f' / {col["wip_limit"]}' if col["wip_limit"] else "") + "</span></h2></summary>"
+        + ("".join(card_html(r) for r in cards.get(col["id"], [])) or '<p class="muted small">No cards</p>')
+        + "</details>"
+        for col in db.execute("SELECT * FROM columns ORDER BY position"))
+
+    with open(os.path.join(BASE_DIR, "snapshot.html"), encoding="utf-8") as f:
+        page = Template(f.read()).substitute(
+            updated=f"{datetime.now():%a %d.%m. %H:%M}",
+            phases=f'<section class="card"><h2>Phases</h2>{phases}</section>' if phases else "",
+            columns=columns,
+        )
+    tmp = os.path.join(T.SNAPSHOT_DIR, ".workflow.html.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(page)
+    os.replace(tmp, os.path.join(T.SNAPSHOT_DIR, "workflow.html"))  # sync never sees a half-written file
+
+
+@bp.after_app_request
+def snapshot_after_change(response):
+    """Board changes and tracker changes (the timer moves card time) both refresh it."""
+    if T.SNAPSHOT_DIR and request.method != "GET" and response.status_code < 400:
+        try:
+            write_snapshot()
+        except Exception as e:  # never fail the user's action because the sync folder is unavailable
+            T.app.logger.warning("workflow snapshot failed: %s", e)
+    return response
 
 
 # ---------------------------------------------------------------- hook into the tracker

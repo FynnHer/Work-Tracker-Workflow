@@ -23,6 +23,9 @@ Use the tracker's virtualenv if you have one (`../Tracker/.venv/bin/python run.p
 Don't run `Tracker/app.py` at the same time; both use port 47474. On macOS, `autostart.sh` still
 starts `app.py`, so point the LaunchAgent at `Workflow/run.py` if you want the board after a login.
 
+With the tracker's `SNAPSHOT_DIR` set, a read-only `workflow.html` (phases and every column with its
+cards, no JavaScript) is written there next to `worktracker.html` after every change, for the phone.
+
 ## Use
 
 Open the board with the **Workflow** tab on the right edge of the page or press **W**. Close it
