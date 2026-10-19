@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "work-tracker",
+  "owner": { "name": "Work Tracker" },
+  "plugins": [
+    {
+      "name": "workflow",
+      "description": "Work on Workflow board cards from Claude Code: load a card, tick its checklist, start its timer, add plans as cards.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "workflow",
+  "version": "1.0.0",
+  "description": "Work on Workflow board cards from Codex: load a card into the session, tick its checklist, start its timer, add plans as cards.",
+  "homepage": "https://github.com/Steakbus/Work-Tracker-Workflow",
+  "repository": "https://github.com/Steakbus/Work-Tracker-Workflow",
+  "keywords": ["kanban", "work-tracker", "workflow"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Workflow",
+    "shortDescription": "Workflow board cards in Codex",
+    "category": "Productivity",
+    "capabilities": ["Instructions"],
+    "defaultPrompt": ["Show my Workflow board.", "Add this plan to Workflow."]
+  }
+}

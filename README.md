@@ -57,6 +57,35 @@ box opens it too.
 Renaming the running card also updates the tracker note. Deleting or archiving a card never deletes
 tracked time; the sessions stay in the tracker.
 
+## Claude Code & Codex
+
+The `workflow` plugin brings the board into an agent session: `/workflow` lists the open cards,
+`/workflow 12` (or part of a title) loads a card's description and checklist as the task, and
+"add this plan to workflow" turns a plan from the conversation into cards (steps become checklist
+items). While working, the agent ticks checklist items and can start the timer, move the card and
+add follow-ups. It uses the API below, so the server has to run.
+
+```sh
+# Claude Code
+claude plugin marketplace add Steakbus/Work-Tracker-Workflow
+claude plugin install workflow@work-tracker
+
+# Codex
+codex plugin marketplace add Steakbus/Work-Tracker-Workflow
+codex plugin add workflow@work-tracker
+```
+
+Codex's sandbox blocks `localhost` as well; let it reach the board with this in
+`~/.codex/config.toml`:
+
+```toml
+[sandbox_workspace_write]
+network_access = true
+```
+
+The skill is `skills/workflow` (`SKILL.md` plus `wf.py`, standard library only), to copy into
+any other agent that reads skills.
+
 ## How it connects
 
 ```text

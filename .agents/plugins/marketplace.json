@@ -1,0 +1,20 @@
+{
+  "name": "work-tracker",
+  "interface": {
+    "displayName": "Work Tracker"
+  },
+  "plugins": [
+    {
+      "name": "workflow",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "workflow",
+  "description": "Work on Workflow board cards from Claude Code: load a card into the session, tick its checklist, start its timer, add plans as cards.",
+  "homepage": "https://github.com/Steakbus/Work-Tracker-Workflow",
+  "repository": "https://github.com/Steakbus/Work-Tracker-Workflow",
+  "keywords": ["kanban", "work-tracker", "workflow"]
+}
